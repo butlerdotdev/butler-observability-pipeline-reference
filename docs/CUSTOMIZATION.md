@@ -2,6 +2,53 @@
 
 Override patterns for extending the reference beyond its production-proven defaults.
 
+## Vector Pipeline Topology
+
+The Vector aggregator processes three signal types through a source-transform-sink pipeline. Core sources are always enabled; optional sources (dashed) are commented out and enabled per environment.
+
+```mermaid
+flowchart LR
+    subgraph sources["Sources"]
+        SM["self_metrics<br/>(internal)"]
+        SL["self_logs<br/>(internal)"]
+        HTTP["http_source<br/>:8080"]
+        PRW["prom_remote_write<br/>:9000"]
+        OTLP["otlp<br/>:4317/:4318"]
+        SNMP["snmp_trap<br/>:9162"]:::optional
+        SYSL["sys_log<br/>:9601 TCP"]:::optional
+        SYSU["sys_log_udp<br/>:9602 UDP"]:::optional
+    end
+
+    subgraph transforms["Transforms"]
+        REMAP["remap<br/>(parse JSON)"]
+        FILTER["filter_logs<br/>(drop metrics)"]
+        RSNMP["remap_snmp_trap"]:::optional
+        RSYSL["remap_syslog_os"]:::optional
+        RSYSU["remap_syslog_ome"]:::optional
+    end
+
+    subgraph sinks["Sinks"]
+        VM["victoria_metrics<br/>disk buffer: 9GB"]
+        LOKI["loki_logs<br/>disk buffer: 4GB"]
+        TEMPO["tempo_traces<br/>disk buffer: 256MB"]
+        LSNMP["loki_snmp_trap"]:::optional
+        LSYSL["loki_syslog_os"]:::optional
+        LSYSU["loki_syslog_ome"]:::optional
+    end
+
+    SM --> VM
+    PRW --> VM
+    SL --> LOKI
+    HTTP --> REMAP --> FILTER --> LOKI
+    OTLP --> TEMPO
+
+    SNMP --> RSNMP --> LSNMP
+    SYSL --> RSYSL --> LSYSL
+    SYSU --> RSYSU --> LSYSU
+
+    classDef optional stroke-dasharray: 5 5,stroke:#999,color:#999
+```
+
 ## When to Override Which Values
 
 The dev and prd overlays ship with sizing presets proven in production. Override when your workload characteristics differ.
@@ -22,6 +69,21 @@ Increase buffer sizes if your backends have longer maintenance windows or if you
 ## Enabling Optional Sources
 
 Optional sources are commented out in matched groups: source, transform(s), sink(s), containerPort, and service port. All pieces in a group must be uncommented together for the source to work.
+
+```mermaid
+flowchart TD
+    subgraph group["Matched Group (all uncommented together)"]
+        SRC["Source<br/>customConfig.sources"]
+        XFM["Transform<br/>customConfig.transforms"]
+        SNK["Sink<br/>customConfig.sinks"]
+        CP["Container Port<br/>containerPorts"]
+        SP["Service Port<br/>service.ports"]
+    end
+
+    SRC --> XFM --> SNK
+    SRC -.-> CP
+    CP -.-> SP
+```
 
 ### SNMP Trap (port 9162)
 
@@ -61,6 +123,13 @@ Follow the matched-group pattern:
 Authentication is disabled by default. The reference assumes plain HTTP to internal network endpoints — the security boundary is the network itself. This is the production-proven pattern when backends are colocated on the same internal network.
 
 For backends requiring authentication, each sink type has a different auth mechanism. The general pattern:
+
+```mermaid
+flowchart LR
+    SECRET["K8s Secret<br/>(vector namespace)"] -->|"secretKeyRef"| ENV["Env Var<br/>in Vector pod"]
+    ENV -->|"${VAR_NAME}"| SINK["Sink auth config"]
+    SINK --> BACKEND["Backend<br/>(Loki/VM/Tempo)"]
+```
 
 1. Provision a Secret in the `vector` namespace containing the credentials
 2. Mount the Secret's keys as environment variables via the `env` block in the overlay values
@@ -189,6 +258,17 @@ When this is appropriate: dual-writing to a backup Loki instance, splitting logs
 ## Scaling Beyond the Prd Preset
 
 The prd preset handles a production load of ~15 tenant clusters. For larger deployments:
+
+```mermaid
+flowchart TD
+    LOAD["Increasing load"] --> HPA["Raise HPA maxReplicas<br/>(first lever)"]
+    HPA --> RES["Increase pod resources<br/>(CPU/memory requests+limits)"]
+    RES --> BUF["Increase buffer sizes<br/>(longer outage tolerance)"]
+    BUF --> PVC["Increase persistence<br/>(must exceed sum of buffers)"]
+    PVC --> MULTI["Multiple aggregator instances<br/>(50+ clusters)"]
+
+    style MULTI fill:#fff3e0,stroke:#e65100
+```
 
 ### HPA ceiling
 

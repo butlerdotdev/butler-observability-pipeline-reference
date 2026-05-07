@@ -2,6 +2,19 @@
 
 Fork-to-running deployment of the Butler observability pipeline reference.
 
+## Overview
+
+```mermaid
+flowchart LR
+    FORK["1. Fork repo"] --> REPLACE["2. Replace<br/>REQUIRED_ placeholders"]
+    REPLACE --> RENAME["3. Rename cluster<br/>directories"]
+    RENAME --> BOOTSTRAP["4. Bootstrap Flux"]
+    BOOTSTRAP --> VALIDATE["5. Validate data flow"]
+
+    style FORK fill:#e8f5e9,stroke:#2e7d32
+    style VALIDATE fill:#e8f5e9,stroke:#2e7d32
+```
+
 ## Prerequisites
 
 - **Pipeline cluster.** A Kubernetes cluster designated as your observability pipeline. This is typically a Butler-managed tenant cluster, but any cluster with Flux and a storage class will work.
@@ -127,10 +140,23 @@ kubectl get hpa -n vector
 ```
 
 Expected progression:
-1. `infra-controllers` Kustomization reconciles, `kube-prometheus-stack` HelmRelease installs
-2. Prometheus, kube-state-metrics, node-exporter pods become Ready in the `observability` namespace
-3. `apps` Kustomization reconciles (depends on infra), Vector HelmRelease installs
-4. Vector pods become Ready in the `vector` namespace, HPA active
+
+```mermaid
+sequenceDiagram
+    participant Flux
+    participant Infra as infra-controllers
+    participant KPS as kube-prometheus-stack
+    participant Apps as apps
+    participant Vec as Vector
+
+    Flux->>Infra: Reconcile infrastructure/controllers/
+    Infra->>KPS: Install HelmRelease
+    KPS-->>Infra: Pods Ready (observability ns)
+    Infra-->>Flux: Ready (wait: true satisfied)
+    Flux->>Apps: Reconcile apps/dev/ (dependsOn met)
+    Apps->>Vec: Install HelmRelease
+    Vec-->>Apps: Pods Ready, HPA active (vector ns)
+```
 
 ### 8. Validate the deployment
 
@@ -152,6 +178,21 @@ kubectl get helmrelease -n vector vector
 ### Confirm data path
 
 Send synthetic data to each receiver port to confirm end-to-end delivery.
+
+```mermaid
+flowchart LR
+    subgraph ports["Aggregator Ports"]
+        P8080[":8080 HTTP"]
+        P9000[":9000 Prom RW"]
+        P4317[":4317 OTLP gRPC"]
+        P4318[":4318 OTLP HTTP"]
+    end
+
+    P8080 -- "JSON logs" --> LOKI["Loki"]
+    P9000 -- "metrics" --> VM["VictoriaMetrics"]
+    P4317 -- "traces" --> TEMPO["Tempo"]
+    P4318 -- "traces" --> TEMPO
+```
 
 **HTTP logs (port 8080):**
 

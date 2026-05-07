@@ -1,0 +1,357 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: vector
+spec:
+  chart:
+    spec:
+      version: "~0.52.0"
+  values:
+    env:
+      - name: VECTOR_WATCH_CONFIG
+        value: "true"
+      # Uncomment to mount backend credentials from a Secret.
+      # Customer provisions the Secret via SealedSecrets,
+      # external-secrets-operator, or kubectl create secret.
+      #
+      # - name: LOKI_USERNAME
+      #   valueFrom:
+      #     secretKeyRef:
+      #       name: backend-credentials
+      #       key: loki-username
+      # - name: LOKI_PASSWORD
+      #   valueFrom:
+      #     secretKeyRef:
+      #       name: backend-credentials
+      #       key: loki-password
+      # - name: VM_BEARER_TOKEN
+      #   valueFrom:
+      #     secretKeyRef:
+      #       name: backend-credentials
+      #       key: vm-token
+      # - name: TEMPO_TOKEN
+      #   valueFrom:
+      #     secretKeyRef:
+      #       name: backend-credentials
+      #       key: tempo-token
+    role: Aggregator
+    podLabels:
+      vector.dev/exclude: "false"
+    image:
+      repository: "timberio/vector"
+      tag: "0.55.0-alpine"
+      pullPolicy: "IfNotPresent"
+    customConfig:
+      data_dir: /vector-data-dir
+      api:
+        enabled: true
+        address: 0.0.0.0:8686
+      # ---------------------------------------------------------------
+      # Sources
+      # ---------------------------------------------------------------
+      # Core sources are always enabled. They match the agent-to-
+      # aggregator contracts defined in ButlerConfig pipeline endpoints.
+      sources:
+        self_metrics:
+          type: internal_metrics
+          namespace: vector_pipeline_self_metrics
+          scrape_interval_secs: 15
+        self_logs:
+          type: internal_logs
+        prometheus_remote_write_source:
+          type: prometheus_remote_write
+          address: 0.0.0.0:9000
+        http_source:
+          type: http_server
+          address: 0.0.0.0:8080
+        otlp:
+          type: opentelemetry
+          grpc:
+            address: 0.0.0.0:4317
+          http:
+            address: 0.0.0.0:4318
+          use_otlp_decoding: true
+        # OPTIONAL: SNMP trap source.
+        # Uncomment if your environment has SNMP devices forwarding
+        # traps to this aggregator. Also uncomment the matching
+        # transform (remap_snmp_trap), sink (loki_snmp_trap),
+        # containerPort, and service port sections below.
+        #
+        # snmp_trap:
+        #   type: http_server
+        #   address: 0.0.0.0:9162
+        #
+        # OPTIONAL: Syslog sources (TCP + UDP).
+        # Uncomment if your environment has hosts forwarding syslog
+        # to this aggregator. Also uncomment the matching transforms
+        # (remap_syslog_os, remap_syslog_ome), sinks (loki_syslog_os,
+        # loki_syslog_ome), containerPorts, and service ports below.
+        #
+        # sys_log:
+        #   type: syslog
+        #   address: 0.0.0.0:9601
+        #   mode: tcp
+        # sys_log_udp:
+        #   type: syslog
+        #   address: 0.0.0.0:9602
+        #   mode: udp
+      # ---------------------------------------------------------------
+      # Transforms
+      # ---------------------------------------------------------------
+      transforms:
+        remap:
+          type: remap
+          inputs: ["http_source"]
+          source: |
+            . = parse_json!(.message)
+        filter_logs:
+          type: filter
+          inputs: ["remap"]
+          condition: '!exists(.counter) && !exists(.gauge) && !exists(.aggregated_histogram) && !exists(.aggregated_summary)'
+        # OPTIONAL: Uncomment if snmp_trap source is enabled.
+        # remap_snmp_trap:
+        #   type: remap
+        #   inputs: ["snmp_trap"]
+        #   source: |
+        #     parsed = parse_json!(.message)
+        #     . = parsed.metrics
+        #
+        # OPTIONAL: Uncomment if syslog sources are enabled.
+        # remap_syslog_ome:
+        #   type: remap
+        #   inputs: ["sys_log_udp"]
+        #   source: |
+        #     .parsed = parse_syslog!(.message)
+        #     .host = .parsed.host
+        # remap_syslog_os:
+        #   type: remap
+        #   inputs: ["sys_log"]
+        #   source: |
+        #     .parsed = parse_syslog!(.message)
+        #     .host = .parsed.host
+      # ---------------------------------------------------------------
+      # Sinks
+      # ---------------------------------------------------------------
+      sinks:
+        # Metrics: self-monitoring metrics + forwarded Prometheus
+        # remote-write data.
+        victoria_metrics:
+          type: prometheus_remote_write
+          inputs:
+            - self_metrics
+            - prometheus_remote_write_source
+          # REQUIRED: Replace with your VictoriaMetrics vminsert
+          # endpoint. Path must include the insert API route.
+          endpoint: "REQUIRED_VICTORIA_METRICS_ENDPOINT"
+          # Example: "http://10.0.0.1:8480/insert/0/prometheus/api/v1/write"
+          #
+          # Uncomment for bearer token auth:
+          # auth:
+          #   strategy: bearer
+          #   token: "${VM_BEARER_TOKEN}"
+          buffer:
+            type: disk
+            max_size: 9663676416
+            when_full: block
+        # Logs: filtered HTTP source logs + aggregator self-logs.
+        loki_logs:
+          type: loki
+          inputs: ["filter_logs", "self_logs"]
+          # REQUIRED: Replace with your Loki endpoint.
+          endpoint: "REQUIRED_LOKI_ENDPOINT"
+          # Example: "http://10.0.0.2:3100"
+          #
+          # REQUIRED: Replace with your Loki tenant ID.
+          tenant_id: "REQUIRED_TENANT_ID"
+          # Example: "default" or "my-org"
+          #
+          # Uncomment for basic auth:
+          # auth:
+          #   strategy: basic
+          #   user: "${LOKI_USERNAME}"
+          #   password: "${LOKI_PASSWORD}"
+          encoding:
+            codec: json
+          out_of_order_action: "accept"
+          labels:
+            # REQUIRED: Replace with your pipeline identifier and
+            # environment name.
+            pipeline: "REQUIRED_PIPELINE_NAME"
+            # Example: "obs-pipeline"
+            service_name: "vector"
+            env: "prd"
+          buffer:
+            type: disk
+            max_size: 4294967296
+            when_full: block
+        # Traces: OTLP traces forwarded to Tempo.
+        tempo_traces:
+          type: opentelemetry
+          inputs:
+            - "otlp.traces"
+          protocol:
+            type: http
+            # REQUIRED: Replace with your Tempo OTLP HTTP endpoint.
+            uri: "REQUIRED_TEMPO_ENDPOINT"
+            # Example: "http://10.0.0.3:4318/v1/traces"
+            #
+            # Uncomment for header-based auth:
+            # headers:
+            #   Authorization: "Bearer ${TEMPO_TOKEN}"
+            method: post
+            encoding:
+              codec: otlp
+          buffer:
+            type: disk
+            max_size: 268435488
+        # OPTIONAL: Uncomment if snmp_trap source is enabled.
+        # loki_snmp_trap:
+        #   type: loki
+        #   inputs: ["remap_snmp_trap"]
+        #   endpoint: "REQUIRED_LOKI_ENDPOINT"
+        #   tenant_id: "REQUIRED_TENANT_ID"
+        #   encoding:
+        #     codec: json
+        #   out_of_order_action: "accept"
+        #   labels:
+        #     pipeline: "REQUIRED_PIPELINE_NAME"
+        #     service_name: "vector"
+        #     event_type: "snmp_trap"
+        #     env: "prd"
+        #
+        # OPTIONAL: Uncomment if syslog sources are enabled.
+        # loki_syslog_os:
+        #   type: loki
+        #   inputs: ["remap_syslog_os"]
+        #   endpoint: "REQUIRED_LOKI_ENDPOINT"
+        #   tenant_id: "REQUIRED_TENANT_ID"
+        #   encoding:
+        #     codec: json
+        #   out_of_order_action: "accept"
+        #   labels:
+        #     pipeline: "REQUIRED_PIPELINE_NAME"
+        #     service_name: "vector"
+        #     source: "linux_syslog"
+        #     log_type: "syslog"
+        #     env: "prd"
+        #     host: "{{ `{{host}}` }}"
+        # loki_syslog_ome:
+        #   type: loki
+        #   inputs: ["remap_syslog_ome"]
+        #   endpoint: "REQUIRED_LOKI_ENDPOINT"
+        #   tenant_id: "REQUIRED_TENANT_ID"
+        #   encoding:
+        #     codec: json
+        #   out_of_order_action: "accept"
+        #   labels:
+        #     pipeline: "REQUIRED_PIPELINE_NAME"
+        #     service_name: "vector"
+        #     source: "openmanage"
+        #     log_type: "syslog"
+        #     env: "prd"
+        #     host: "{{ `{{host}}` }}"
+    # -----------------------------------------------------------------
+    # Container ports
+    # -----------------------------------------------------------------
+    containerPorts:
+      - name: api
+        containerPort: 8686
+        protocol: TCP
+      - name: prometheus
+        containerPort: 9000
+        protocol: TCP
+      - name: http-source
+        containerPort: 8080
+        protocol: TCP
+      - name: otlp-grpc
+        containerPort: 4317
+        protocol: TCP
+      - name: otlp-http
+        containerPort: 4318
+        protocol: TCP
+      # OPTIONAL: Uncomment if SNMP trap source is enabled.
+      # - name: snmp
+      #   containerPort: 9162
+      #   protocol: TCP
+      #
+      # OPTIONAL: Uncomment if syslog sources are enabled.
+      # - name: syslog
+      #   containerPort: 9601
+      #   protocol: TCP
+      # - name: syslog-udp
+      #   containerPort: 9602
+      #   protocol: UDP
+    # -----------------------------------------------------------------
+    # Service
+    # -----------------------------------------------------------------
+    service:
+      enabled: true
+      type: "LoadBalancer"
+      ports:
+        - name: prometheus
+          port: 9000
+          targetPort: prometheus
+          protocol: TCP
+        - name: http-source
+          port: 8080
+          targetPort: http-source
+          protocol: TCP
+        - name: otlp-grpc
+          port: 4317
+          targetPort: otlp-grpc
+          protocol: TCP
+        - name: otlp-http
+          port: 4318
+          targetPort: otlp-http
+          protocol: TCP
+        # OPTIONAL: Uncomment if SNMP trap source is enabled.
+        # - name: snmp
+        #   port: 9162
+        #   targetPort: snmp
+        #   protocol: TCP
+        #
+        # OPTIONAL: Uncomment if syslog sources are enabled.
+        # - name: syslog
+        #   port: 9601
+        #   targetPort: syslog
+        #   protocol: TCP
+        # - name: syslog-udp
+        #   port: 9602
+        #   targetPort: syslog-udp
+        #   protocol: UDP
+    # -----------------------------------------------------------------
+    # Resources — prd preset
+    # -----------------------------------------------------------------
+    resources:
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+    # -----------------------------------------------------------------
+    # Security
+    # -----------------------------------------------------------------
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+    podSecurityContext:
+      runAsNonRoot: true
+      fsGroup: 65534
+    # -----------------------------------------------------------------
+    # Persistence — prd preset
+    # -----------------------------------------------------------------
+    persistence:
+      enabled: true
+      storageClassName: longhorn
+      size: 20Gi
+    # -----------------------------------------------------------------
+    # Autoscaling — prd preset
+    # -----------------------------------------------------------------
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 75

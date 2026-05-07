@@ -1,0 +1,13 @@
+# Secret templates (seal with kubeseal before committing)
+secrets/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

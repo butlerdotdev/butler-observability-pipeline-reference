@@ -1,0 +1,62 @@
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: infra-controllers
+  namespace: flux-system
+spec:
+  interval: 10m0s
+  retryInterval: 2m
+  timeout: 5m
+  path: ./infrastructure/controllers
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  wait: true
+  patches:
+    - patch: |
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        metadata:
+          name: kube-prometheus-stack
+          namespace: observability
+        spec:
+          chart:
+            spec:
+              version: "~67.0.0"
+          values:
+            prometheus:
+              prometheusSpec:
+                replicas: 1
+                retention: 2h
+                externalLabels:
+                  cluster: pipeline-prd
+                storageSpec:
+                  volumeClaimTemplate:
+                    spec:
+                      storageClassName: longhorn
+                      accessModes: ["ReadWriteOnce"]
+                      resources:
+                        requests:
+                          storage: 50Gi
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 2Gi
+                  limits:
+                    cpu: 2000m
+                    memory: 4Gi
+                remoteWrite:
+                  - url: http://vector.vector.svc:9000
+                    name: vector-pipeline-prd
+            prometheusOperator:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+      target:
+        kind: HelmRelease
+        name: kube-prometheus-stack

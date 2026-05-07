@@ -223,7 +223,9 @@ The credential Secret must exist in the `vector` namespace before the Vector Hel
 
 ## Adding Custom Sinks
 
-The reference ships three sinks targeting the standard observability backends (VictoriaMetrics, Loki, Tempo). To add additional sinks:
+The reference ships three sinks targeting VictoriaMetrics, Loki, and Tempo as representative backends. These are not requirements — Vector supports a wide range of sink types. You can replace any default sink with one targeting your preferred backend (e.g., Mimir or Thanos instead of VictoriaMetrics, Elasticsearch instead of Loki, Jaeger instead of Tempo) by changing the sink `type` and `endpoint` in the overlay values.
+
+To add additional sinks beyond the defaults:
 
 1. Define the sink under `customConfig.sinks` with a unique name
 2. Set `inputs` to reference the appropriate sources or transforms

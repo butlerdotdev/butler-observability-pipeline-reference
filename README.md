@@ -4,6 +4,8 @@ Production-proven Vector aggregator pattern packaged as a fork-and-deploy GitOps
 
 ## Architecture
 
+The pipeline cluster is itself a Butler-managed tenant cluster, designated for running the observability aggregator. It follows the same lifecycle as any other tenant — provisioned through Butler, managed via GitOps — but its workload is the pipeline infrastructure rather than application services.
+
 ```mermaid
 flowchart LR
     subgraph tenants["Tenant Clusters"]
@@ -13,7 +15,7 @@ flowchart LR
         TN["Tenant N<br/>Prometheus"]
     end
 
-    subgraph pipeline["Pipeline Cluster"]
+    subgraph pipeline["Pipeline Cluster (Butler tenant)"]
         direction TB
         subgraph vector["Vector Aggregator"]
             HTTP[":8080<br/>HTTP Logs"]
@@ -24,9 +26,9 @@ flowchart LR
     end
 
     subgraph backends["Backend Storage"]
-        VM["VictoriaMetrics<br/>(metrics)"]
-        LOKI["Loki<br/>(logs)"]
-        TEMPO["Tempo<br/>(traces)"]
+        VM["Metrics<br/>(e.g. VictoriaMetrics,<br/>Mimir, Thanos)"]
+        LOKI["Logs<br/>(e.g. Loki,<br/>Elasticsearch, OpenSearch)"]
+        TEMPO["Traces<br/>(e.g. Tempo,<br/>Jaeger, SigNoz)"]
     end
 
     T1 -- "logs" --> HTTP
@@ -45,7 +47,7 @@ flowchart LR
 
 - **Not Butler-managed at runtime.** Butler's auto-enroll system deploys agents to tenant clusters. The aggregator deploys once per pipeline cluster and is owned by the customer via GitOps. Butler has no runtime control over this deployment.
 - **No secret management.** The reference assumes plain HTTP to internal network endpoints. If your backends require authentication, you provision and manage credentials yourself (SealedSecrets, external-secrets-operator, or manual kubectl). See [CUSTOMIZATION.md](docs/CUSTOMIZATION.md) for auth patterns.
-- **No backend storage.** This reference deploys the pipeline, not the backends it sends to. You need existing VictoriaMetrics, Loki, and Tempo instances (or equivalent) before deploying this.
+- **No backend storage.** This reference deploys the pipeline, not the backends it sends to. You need existing backend instances before deploying this. The default sinks target VictoriaMetrics (metrics), Loki (logs), and Tempo (traces), but Vector supports a wide range of sink types — any Prometheus remote-write-compatible metrics store, any Loki-compatible log aggregator, and any OTLP-compatible trace backend will work. Swap the sink type and endpoint to match your stack.
 - **No console integration.** The Butler console doesn't manage the aggregator. Pipeline registration in ButlerConfig points tenant agents at this aggregator's LoadBalancer IP, but the aggregator itself is GitOps-managed.
 
 ## Quick Start
@@ -84,7 +86,7 @@ This follows the [flux2-kustomize-helm-example](https://github.com/fluxcd/flux2-
 
 This reference deploys two components per pipeline cluster:
 
-- **Vector aggregator**: the observability pipeline that receives data from tenant agents and forwards to backend storage. Sources: HTTP (logs from Vector agents on port 8080), Prometheus remote write (metrics on port 9000), OTLP (traces on ports 4317/4318), plus self-monitoring metrics and logs. Sinks: VictoriaMetrics, Loki, Tempo. All critical sinks use disk buffers with backpressure (no silent data loss).
+- **Vector aggregator**: the observability pipeline that receives data from tenant agents and forwards to backend storage. Sources: HTTP (logs from Vector agents on port 8080), Prometheus remote write (metrics on port 9000), OTLP (traces on ports 4317/4318), plus self-monitoring metrics and logs. Default sinks target VictoriaMetrics, Loki, and Tempo, but any compatible backend works — Vector supports [dozens of sink types](https://vector.dev/docs/reference/configuration/sinks/). All critical sinks use disk buffers with backpressure (no silent data loss).
 
 - **kube-prometheus-stack**: monitors the aggregator's own health, resource usage, and pipeline throughput. Without this, pipeline degradation is invisible until it surfaces downstream. Grafana and Alertmanager are disabled — Prometheus scrapes locally and remote-writes to the Vector aggregator, which forwards to VictoriaMetrics alongside tenant metrics. Includes Flux CRD state metrics for monitoring GitOps reconciliation health.
 

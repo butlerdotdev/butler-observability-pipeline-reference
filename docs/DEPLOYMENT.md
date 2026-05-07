@@ -17,13 +17,13 @@ flowchart LR
 
 ## Prerequisites
 
-- **Pipeline cluster.** A Kubernetes cluster designated as your observability pipeline. This is typically a Butler-managed tenant cluster, but any cluster with Flux and a storage class will work.
+- **Pipeline cluster.** A Kubernetes cluster designated as your observability pipeline. This is itself a Butler-managed tenant cluster — provisioned through Butler like any other tenant, but dedicated to running the pipeline infrastructure. Any cluster with Flux and a storage class will work, but using a Butler tenant cluster means it follows the same lifecycle and management patterns as the rest of your fleet.
 
 - **Flux v2.** Installed on the pipeline cluster, or you'll bootstrap it during deployment. Flux reconciles this repository's manifests onto the cluster.
 
 - **StorageClass.** The reference defaults to `longhorn`. If your cluster uses a different storage class, update the `persistence.storageClassName` in the overlay values and the `storageClassName` in the cluster infrastructure.yaml patches.
 
-- **Network reachability to backends.** The aggregator needs to reach your VictoriaMetrics, Loki, and Tempo instances over the network. Confirm connectivity from the pipeline cluster to each backend endpoint before deploying.
+- **Network reachability to backends.** The aggregator needs to reach your backend storage instances over the network. The default configuration targets VictoriaMetrics (metrics), Loki (logs), and Tempo (traces), but any compatible backend works — substitute the sink type and endpoint for your stack. Confirm connectivity from the pipeline cluster to each backend endpoint before deploying.
 
 - **Network reachability from tenants.** Tenant clusters running Butler agents need to reach the aggregator's LoadBalancer IP. The LoadBalancer exposes ports 8080 (HTTP logs), 9000 (Prometheus remote write), 4317 (OTLP gRPC), and 4318 (OTLP HTTP). Confirm that tenant cluster networks can route to the pipeline cluster's LoadBalancer.
 

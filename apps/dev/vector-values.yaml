@@ -180,6 +180,10 @@ spec:
             # Example: "obs-pipeline"
             service_name: "vector"
             env: "dev"
+            cluster: "{{ `{{cluster}}` }}"
+            tenant_namespace: "{{ `{{tenant_namespace}}` }}"
+            environment: "{{ `{{environment}}` }}"
+            provider_type: "{{ `{{provider_type}}` }}"
           buffer:
             type: disk
             max_size: 2147483648

@@ -104,10 +104,22 @@ spec:
           inputs: ["http_source"]
           source: |
             . = parse_json!(.message)
+            if !exists(.cluster) { .cluster = "" }
+            if !exists(.tenant_namespace) { .tenant_namespace = "" }
+            if !exists(.environment) { .environment = "" }
+            if !exists(.provider_type) { .provider_type = "" }
         filter_logs:
           type: filter
           inputs: ["remap"]
           condition: '!exists(.counter) && !exists(.gauge) && !exists(.aggregated_histogram) && !exists(.aggregated_summary)'
+        remap_self_logs:
+          type: remap
+          inputs: ["self_logs"]
+          source: |
+            .cluster = ""
+            .tenant_namespace = ""
+            .environment = ""
+            .provider_type = ""
         # OPTIONAL: Uncomment if snmp_trap source is enabled.
         # remap_snmp_trap:
         #   type: remap
@@ -156,7 +168,7 @@ spec:
         # Logs: filtered HTTP source logs + aggregator self-logs.
         loki_logs:
           type: loki
-          inputs: ["filter_logs", "self_logs"]
+          inputs: ["filter_logs", "remap_self_logs"]
           # REQUIRED: Replace with your Loki endpoint.
           endpoint: "REQUIRED_LOKI_ENDPOINT"
           # Example: "http://10.0.0.2:3100"
@@ -180,6 +192,10 @@ spec:
             # Example: "obs-pipeline"
             service_name: "vector"
             env: "prd"
+            cluster: "{{ `{{cluster}}` }}"
+            tenant_namespace: "{{ `{{tenant_namespace}}` }}"
+            environment: "{{ `{{environment}}` }}"
+            provider_type: "{{ `{{provider_type}}` }}"
           buffer:
             type: disk
             max_size: 4294967296
